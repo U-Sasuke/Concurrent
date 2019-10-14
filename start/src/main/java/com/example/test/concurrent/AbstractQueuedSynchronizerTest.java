@@ -1,5 +1,14 @@
 package com.example.test.concurrent;
 
+import sun.misc.Unsafe;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.AbstractQueuedSynchronizer;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.LockSupport;
+
 public class AbstractQueuedSynchronizerTest {
     private static final long serialVersionUID = 7373984972572414691L;
 
@@ -149,100 +158,59 @@ public class AbstractQueuedSynchronizerTest {
         node.prev = null;
     }
 
-    /**
-     * Wakes up node's successor, if one exists.
-     *
-     * @param node the node
-     */
+    /** 唤醒下一个线程 */
     private void unparkSuccessor(Node node) {
-        /*
-         * If status is negative (i.e., possibly needing signal) try
-         * to clear in anticipation of signalling.  It is OK if this
-         * fails or if status is changed by waiting thread.
-         */
+
+        /** 尝试将node的等待状态置为0,这样的话,后继争用线程可以有机会再尝试获取一次锁 */
         int ws = node.waitStatus;
         if (ws < 0)
             compareAndSetWaitStatus(node, ws, 0);
 
-        /*
-         * Thread to unpark is held in successor, which is normally
-         * just the next node.  But if cancelled or apparently null,
-         * traverse backwards from tail to find the actual
-         * non-cancelled successor.
-         */
         Node s = node.next;
+        /** 下一个节点为空或者等待状态为已取消，则从tail节点开始向前找到最近的非取消节点 */
         if (s == null || s.waitStatus > 0) {
             s = null;
             for (Node t = tail; t != null && t != node; t = t.prev)
                 if (t.waitStatus <= 0)
                     s = t;
         }
+        /** 下一个节点不为空且等待状态不是已取消，则唤醒该线程 */
         if (s != null)
             LockSupport.unpark(s.thread);
     }
 
-    /**
-     * Release action for shared mode -- signals successor and ensures
-     * propagation. (Note: For exclusive mode, release just amounts
-     * to calling unparkSuccessor of head if it needs signal.)
-     */
+    /** 唤醒下一个线程 */
     private void doReleaseShared() {
-        /*
-         * Ensure that a release propagates, even if there are other
-         * in-progress acquires/releases.  This proceeds in the usual
-         * way of trying to unparkSuccessor of head if it needs
-         * signal. But if it does not, status is set to PROPAGATE to
-         * ensure that upon release, propagation continues.
-         * Additionally, we must loop in case a new node is added
-         * while we are doing this. Also, unlike other uses of
-         * unparkSuccessor, we need to know if CAS to reset status
-         * fails, if so rechecking.
-         */
+
         for (;;) {
             Node h = head;
             if (h != null && h != tail) {
                 int ws = h.waitStatus;
+                /** 如果head节点的等待状态为SIGNAL，则cas更新为0后，唤醒下一个线程 */
                 if (ws == Node.SIGNAL) {
                     if (!compareAndSetWaitStatus(h, Node.SIGNAL, 0))
                         continue;            // loop to recheck cases
                     unparkSuccessor(h);
                 }
+                /** 如果head节点的等待状态已经被别的线程更新为0，则cas更新状态为PROPAGATE，表明需要传播唤醒 */
                 else if (ws == 0 &&
                         !compareAndSetWaitStatus(h, 0, Node.PROPAGATE))
                     continue;                // loop on failed CAS
             }
+            /** 检查h是否仍然是head，如果不是的话需要再进行循环 */
             if (h == head)                   // loop if head changed
                 break;
         }
     }
 
-    /**
-     * Sets head of queue, and checks if successor may be waiting
-     * in shared mode, if so propagating if either propagate > 0 or
-     * PROPAGATE status was set.
-     *
-     * @param node the node
-     * @param propagate the return value from a tryAcquireShared
-     */
+    /** 设置head节点，判断是否需要唤醒下一个线程 */
     private void setHeadAndPropagate(Node node, int propagate) {
+        /** 保存原head节点 */
         Node h = head; // Record old head for check below
+        /** 设置新head节点 */
         setHead(node);
-        /*
-         * Try to signal next queued node if:
-         *   Propagation was indicated by caller,
-         *     or was recorded (as h.waitStatus either before
-         *     or after setHead) by a previous operation
-         *     (note: this uses sign-check of waitStatus because
-         *      PROPAGATE status may transition to SIGNAL.)
-         * and
-         *   The next node is waiting in shared mode,
-         *     or we don't know, because it appears null
-         *
-         * The conservatism in both of these checks may cause
-         * unnecessary wake-ups, but only when there are multiple
-         * racing acquires/releases, so most need signals now or soon
-         * anyway.
-         */
+
+        /** 如果返回的propagate>0或者原head节点等待状态<0或者新head节点的等待状态<0，则唤醒下一个线程 */
         if (propagate > 0 || h == null || h.waitStatus < 0 ||
                 (h = head) == null || h.waitStatus < 0) {
             Node s = node.next;
@@ -459,17 +427,16 @@ public class AbstractQueuedSynchronizerTest {
         }
     }
 
-    /**
-     * Acquires in shared uninterruptible mode.
-     * @param arg the acquire argument
-     */
+    /** 自旋获取同步状态 */
     private void doAcquireShared(int arg) {
+        /** 把Node节点加入双端队列队尾 */
         final Node node = addWaiter(Node.SHARED);
         boolean failed = true;
         try {
             boolean interrupted = false;
             for (;;) {
                 final Node p = node.predecessor();
+                /** 如果前置节点是head节点，并且获取同步状态成功，则设置head节点，并唤醒下一个线程 */
                 if (p == head) {
                     int r = tryAcquireShared(arg);
                     if (r >= 0) {
@@ -756,19 +723,12 @@ public class AbstractQueuedSynchronizerTest {
                 doAcquireNanos(arg, nanosTimeout);
     }
 
-    /**
-     * Releases in exclusive mode.  Implemented by unblocking one or
-     * more threads if {@link #tryRelease} returns true.
-     * This method can be used to implement method {@link Lock#unlock}.
-     *
-     * @param arg the release argument.  This value is conveyed to
-     *        {@link #tryRelease} but is otherwise uninterpreted and
-     *        can represent anything you like.
-     * @return the value returned from {@link #tryRelease}
-     */
+    /** 释放同步状态 */
     public final boolean release(int arg) {
+        /** 因为线程已经获取了同步状态，所以释放同步状态应该返回true */
         if (tryRelease(arg)) {
             Node h = head;
+            /** 如果head节点不为空，且不是初始节点，则唤醒下一节点。因为不会是取消节点，所以等价于<0 */
             if (h != null && h.waitStatus != 0)
                 unparkSuccessor(h);
             return true;
@@ -776,18 +736,9 @@ public class AbstractQueuedSynchronizerTest {
         return false;
     }
 
-    /**
-     * Acquires in shared mode, ignoring interrupts.  Implemented by
-     * first invoking at least once {@link #tryAcquireShared},
-     * returning on success.  Otherwise the thread is queued, possibly
-     * repeatedly blocking and unblocking, invoking {@link
-     * #tryAcquireShared} until success.
-     *
-     * @param arg the acquire argument.  This value is conveyed to
-     *        {@link #tryAcquireShared} but is otherwise uninterpreted
-     *        and can represent anything you like.
-     */
+    /** 共享式获取同步状态 */
     public final void acquireShared(int arg) {
+        /** 子类实现时，返回负数表示获取失败;返回0表示成功，但是后继争用线程不会成功;返回正数表示获取成功，并且后继争用线程也可能成功 */
         if (tryAcquireShared(arg) < 0)
             doAcquireShared(arg);
     }
@@ -837,17 +788,11 @@ public class AbstractQueuedSynchronizerTest {
                 doAcquireSharedNanos(arg, nanosTimeout);
     }
 
-    /**
-     * Releases in shared mode.  Implemented by unblocking one or more
-     * threads if {@link #tryReleaseShared} returns true.
-     *
-     * @param arg the release argument.  This value is conveyed to
-     *        {@link #tryReleaseShared} but is otherwise uninterpreted
-     *        and can represent anything you like.
-     * @return the value returned from {@link #tryReleaseShared}
-     */
+    /** 释放同步状态 */
     public final boolean releaseShared(int arg) {
+        /** 因为线程已经获取了同步状态，所以释放同步状态应该返回true */
         if (tryReleaseShared(arg)) {
+            /** 唤醒下一个线程 */
             doReleaseShared();
             return true;
         }
