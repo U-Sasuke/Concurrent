@@ -45,7 +45,9 @@ public class AbstractQueuedSynchronizerTest {
         /** 节点关联的线程 */
         volatile Thread thread;
 
-        /** 后继节点 */
+        /** 后继节点，有两种情况。
+            1、共享式同步队列时，都存放同一个final对象SHARED。
+            2、等待队列时，存放下一个Node */
         Node nextWaiter;
 
         /** 是否是分享模式节点 */
@@ -63,17 +65,17 @@ public class AbstractQueuedSynchronizerTest {
         }
 
         /** 构造器：初始化head或者SHARED节点 */
-        Node() {    // Used to establish initial head or SHARED marker
+        Node() {
         }
 
         /** 构造器：新增同步队列节点 */
-        Node(Thread thread, Node mode) {     // Used by addWaiter
+        Node(Thread thread, Node mode) {
             this.nextWaiter = mode;
             this.thread = thread;
         }
 
         /** 构造器：新增等待队列节点 */
-        Node(Thread thread, int waitStatus) { // Used by Condition
+        Node(Thread thread, int waitStatus) {
             this.waitStatus = waitStatus;
             this.thread = thread;
         }
@@ -149,15 +151,10 @@ public class AbstractQueuedSynchronizerTest {
         return node;
     }
 
-    /**
-     * Sets head of queue to be node, thus dequeuing. Called only by
-     * acquire methods.  Also nulls out unused fields for sake of GC
-     * and to suppress unnecessary signals and traversals.
-     *
-     * @param node the node
-     */
+    /** 设置head节点 */
     private void setHead(Node node) {
         head = node;
+        /** 关联线程和前驱节点都没有意义了，设置为null，便于后续GC */
         node.thread = null;
         node.prev = null;
     }
@@ -185,7 +182,6 @@ public class AbstractQueuedSynchronizerTest {
 
     /** 唤醒下一个线程 */
     private void doReleaseShared() {
-
         for (;;) {
             Node h = head;
             if (h != null && h != tail) {
@@ -193,24 +189,24 @@ public class AbstractQueuedSynchronizerTest {
                 /** 如果head节点的等待状态为SIGNAL，则cas更新为0后，唤醒下一个线程 */
                 if (ws == Node.SIGNAL) {
                     if (!compareAndSetWaitStatus(h, Node.SIGNAL, 0))
-                        continue;            // loop to recheck cases
+                        continue;
                     unparkSuccessor(h);
                 }
                 /** 如果head节点的等待状态已经被别的线程更新为0，则cas更新状态为PROPAGATE，表明需要传播唤醒 */
                 else if (ws == 0 &&
                         !compareAndSetWaitStatus(h, 0, Node.PROPAGATE))
-                    continue;                // loop on failed CAS
+                    continue;
             }
             /** 检查h是否仍然是head，如果不是的话需要再进行循环 */
-            if (h == head)                   // loop if head changed
+            if (h == head)
                 break;
         }
     }
 
-    /** 设置head节点，判断是否需要唤醒下一个线程 */
+    /** 设置head节点，向后传播 */
     private void setHeadAndPropagate(Node node, int propagate) {
         /** 保存原head节点 */
-        Node h = head; // Record old head for check below
+        Node h = head;
         /** 设置新head节点 */
         setHead(node);
 
@@ -260,8 +256,9 @@ public class AbstractQueuedSynchronizerTest {
             } else {
                 unparkSuccessor(node);
             }
-
-            node.next = node; // help GC
+            /** 这里之所以不设置为null，主要是Condition部分中有判断是否转移到了同步队列用到了node.next!=null断言入队成功，
+                指向自己同样不符合根可达，符合被GC条件 */
+            node.next = node;
         }
     }
 
@@ -417,19 +414,19 @@ public class AbstractQueuedSynchronizerTest {
 
     /** 自旋获取同步状态 */
     private void doAcquireShared(int arg) {
-        /** 把Node节点加入双端队列队尾 */
+        /** 把Node节点加入同步队列队尾 */
         final Node node = addWaiter(Node.SHARED);
         boolean failed = true;
         try {
             boolean interrupted = false;
             for (;;) {
                 final Node p = node.predecessor();
-                /** 如果前置节点是head节点，并且获取同步状态成功，则设置head节点，并唤醒下一个线程 */
+                /** 如果前置节点是head节点，并且获取同步状态成功，则设置head节点，并向后传播 */
                 if (p == head) {
                     int r = tryAcquireShared(arg);
                     if (r >= 0) {
                         setHeadAndPropagate(node, r);
-                        p.next = null; // help GC
+                        p.next = null;
                         if (interrupted)
                             selfInterrupt();
                         failed = false;
@@ -727,7 +724,9 @@ public class AbstractQueuedSynchronizerTest {
 
     /** 共享式获取同步状态 */
     public final void acquireShared(int arg) {
-        /** 子类实现时，返回负数表示获取失败;返回0表示成功，但是后继争用线程不会成功;返回正数表示获取成功，并且后继争用线程也可能成功 */
+        /** 先尝试一次获取同步状态，子类实现时，返回负数表示获取失败，如果失败则自旋获取同步状态;
+            返回0表示成功，但是后继争用线程不会成功;
+            返回正数表示获取成功，并且后继争用线程也可能成功 */
         if (tryAcquireShared(arg) < 0)
             doAcquireShared(arg);
     }
@@ -1070,7 +1069,7 @@ public class AbstractQueuedSynchronizerTest {
         if (node.waitStatus == Node.CONDITION || node.prev == null)
             return false;
         /** 如果有后继节点，则一定是入队了 */
-        if (node.next != null) // If has successor, it must be on queue
+        if (node.next != null)
             return true;
 
         /** 节点状态不是CONDITION，前驱节点不为null，后继节点为null，则可能是tail节点，遍历队列寻找 */
@@ -1108,7 +1107,7 @@ public class AbstractQueuedSynchronizerTest {
             enq(node);
             return true;
         }
-        /** 如果cas失败，说明节点可能在入队的过程中，自旋来入队 */
+        /** 如果cas失败，说明节点可能在入队的过程中，等待入队完成 */
         while (!isOnSyncQueue(node))
             Thread.yield();
         return false;
@@ -1232,7 +1231,7 @@ public class AbstractQueuedSynchronizerTest {
 
         private static final long serialVersionUID = 1173984872572414699L;
 
-        /** 等待队列是单向队列，等待队列的首节点，首节点是第一个阻塞的线程 */
+        /** 等待队列的首节点（等待队列是单向队列，通过Node的nextWaiter进行遍历，首节点是第一个阻塞的线程） */
         private transient Node firstWaiter;
 
         /** 等待队列的尾节点 */
@@ -1240,10 +1239,9 @@ public class AbstractQueuedSynchronizerTest {
 
         public ConditionObject() { }
 
-        /** 新增节点加入条件等待队列的尾节点 */
+        /** 加入等待队列的尾节点 */
         private Node addConditionWaiter() {
             Node t = lastWaiter;
-            // If lastWaiter is cancelled, clean out.
             if (t != null && t.waitStatus != Node.CONDITION) {
                 /** 如果尾节点等待状态是cancelled，则清除一次队列所有的cancelled节点 */
                 unlinkCancelledWaiters();
@@ -1270,18 +1268,7 @@ public class AbstractQueuedSynchronizerTest {
                     (first = firstWaiter) != null);
         }
 
-        /** 先占位 */
-        private void doSignalAll(Node first) {
-            lastWaiter = firstWaiter = null;
-            do {
-                Node next = first.nextWaiter;
-                first.nextWaiter = null;
-                transferForSignal(first);
-                first = next;
-            } while (first != null);
-        }
-
-        /** 清除一次队列所有的cancelled节点 */
+        /** 清除一次等待队列所有的cancelled节点 */
         private void unlinkCancelledWaiters() {
             Node t = firstWaiter;
             Node trail = null;
@@ -1338,7 +1325,7 @@ public class AbstractQueuedSynchronizerTest {
         public final void await() throws InterruptedException {
             if (Thread.interrupted())
                 throw new InterruptedException();
-            /** 加入条件等待队列 */
+            /** 加入等待队列 */
             Node node = addConditionWaiter();
             /** 释放同步状态，并唤醒后继节点 */
             int savedState = fullyRelease(node);
