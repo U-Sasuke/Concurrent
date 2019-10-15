@@ -106,7 +106,7 @@ public class AbstractQueuedSynchronizerTest {
     /** 超时时间 */
     static final long spinForTimeoutThreshold = 1000L;
 
-    /** 自旋方式入队 */
+    /** 自旋入队 */
     private Node enq(final Node node) {
         for (;;) {
             Node t = tail;
@@ -127,7 +127,7 @@ public class AbstractQueuedSynchronizerTest {
         }
     }
 
-    /** 自旋入队 */
+    /** 入队 */
     private Node addWaiter(Node mode) {
         /** 新建一个Node，持有当前线程的引用 */
         Node node = new Node(Thread.currentThread(), mode);
@@ -225,40 +225,31 @@ public class AbstractQueuedSynchronizerTest {
 
     // Utilities for various versions of acquire
 
-    /**
-     * Cancels an ongoing attempt to acquire.
-     *
-     * @param node the node
-     */
+    /** 节点置为取消状态 */
     private void cancelAcquire(Node node) {
-        // Ignore if node doesn't exist
         if (node == null)
             return;
 
         node.thread = null;
 
-        // Skip cancelled predecessors
         Node pred = node.prev;
+        /** 找到最近的不是取消的前驱节点 */
         while (pred.waitStatus > 0)
             node.prev = pred = pred.prev;
 
-        // predNext is the apparent node to unsplice. CASes below will
-        // fail if not, in which case, we lost race vs another cancel
-        // or signal, so no further action is necessary.
         Node predNext = pred.next;
 
-        // Can use unconditional write instead of CAS here.
-        // After this atomic step, other Nodes can skip past us.
-        // Before, we are free of interference from other threads.
+        /** 节点更新为取消状态 */
         node.waitStatus = Node.CANCELLED;
-
-        // If we are the tail, remove ourselves.
+        /** 如果节点是tail节点，则把前驱节点设置为tail节点 */
         if (node == tail && compareAndSetTail(node, pred)) {
             compareAndSetNext(pred, predNext, null);
         } else {
-            // If successor needs signal, try to set pred's next-link
-            // so it will get one. Otherwise wake it up to propagate.
             int ws;
+            /** 如果前驱节点不是head节点
+                并且前驱节点的等待状态为SIGNAL或者<0的时候更新为SIGNAL成功
+                并且前驱节点的线程不是null，则设置前驱节点的后继节点为当前节点的后继节点，
+                否则直接唤醒后继线程 */
             if (pred != head &&
                     ((ws = pred.waitStatus) == Node.SIGNAL ||
                             (ws <= 0 && compareAndSetWaitStatus(pred, ws, Node.SIGNAL))) &&
@@ -277,19 +268,11 @@ public class AbstractQueuedSynchronizerTest {
     /** 判断是否需要挂起当前线程 */
     private static boolean shouldParkAfterFailedAcquire(Node pred, Node node) {
         int ws = pred.waitStatus;
-        /** 如果前一个节点的等待状态为SIGNAL，则表示前一个节点释放同步状态后会唤醒自己，可以放心的挂起了 */
+        /** 如果前驱节点的等待状态为SIGNAL，则表示前驱节点释放同步状态后会唤醒自己，可以放心的挂起了 */
         if (ws == Node.SIGNAL)
-            /*
-             * This node has already set status asking a release
-             * to signal it, so it can safely park.
-             */
             return true;
-        /** 如果前一个节点的等待状态为CANCELLED，则表示前一个节点被取消了，则往前找第一个没有被取消的节点 */
+        /** 如果前驱节点的等待状态为CANCELLED，则表示前驱节点被取消了，则往前找第一个没有被取消的节点 */
         if (ws > 0) {
-            /*
-             * Predecessor was cancelled. Skip over predecessors and
-             * indicate retry.
-             */
             do {
                 /** 原队列
                  *  pp --> pred --> node
@@ -297,23 +280,22 @@ public class AbstractQueuedSynchronizerTest {
                  *  处理
                  *  pred = pp
                  *  node.prev = pp
+                 *  pp.next = node
                  *  新队列
                  *  pp <-- node
                  *  pp --> node
-                 *  使取消的Node断开队列引用，被GC，如果新的前一个节点也被取消，则继续循环
+                 *  使取消的Node断开队列引用，被GC，如果下一个前驱节点也被取消，则继续循环
                  */
                 node.prev = pred = pred.prev;
             } while (pred.waitStatus > 0);
             pred.next = node;
         } else {
-            /*
-             * waitStatus must be 0 or PROPAGATE.  Indicate that we
-             * need a signal, but don't park yet.  Caller will need to
-             * retry to make sure it cannot acquire before parking.
-             */
-            /** 如果前一个节点的等待状态为0或者PROPAGATE，则设置前一个节点为SIGNAL，告诉它记得唤醒我 */
+            /** 如果前驱节点的等待状态为0或者PROPAGATE，则设置前驱节点为SIGNAL，告诉它记得唤醒我，这一步可以失败。
+                前驱节点状态不可能为CONDITION，因为从等待队列转移到同步队列之前，已经更新等待状态为SIGNAL */
             compareAndSetWaitStatus(pred, ws, Node.SIGNAL);
         }
+        /** 如果前驱节点等待状态是CANCELLED或者前驱节点的等待状态cas更新为SIGNAL失败，则返回false，进入外层的自旋
+            直到前驱节点的等待状态更新为SIGNAL，才能返回true进入后续的挂起线程处理 */
         return false;
     }
 
