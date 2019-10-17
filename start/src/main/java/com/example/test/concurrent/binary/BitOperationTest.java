@@ -1,4 +1,4 @@
-package com.example.test.concurrent;
+package com.example.test.concurrent.binary;
 
 public class BitOperationTest {
 

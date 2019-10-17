@@ -1,4 +1,4 @@
-package com.example.test.concurrent;
+package com.example.test.concurrent.aqs;
 
 import java.util.concurrent.locks.AbstractQueuedSynchronizer;
 
