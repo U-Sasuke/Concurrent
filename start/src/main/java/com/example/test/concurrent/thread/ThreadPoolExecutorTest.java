@@ -382,14 +382,7 @@ public class ThreadPoolExecutorTest extends AbstractExecutorService {
      * Methods for controlling interrupts to worker threads.
      */
 
-    /**
-     * If there is a security manager, makes sure caller has
-     * permission to shut down threads in general (see shutdownPerm).
-     * If this passes, additionally makes sure the caller is allowed
-     * to interrupt each worker thread. This might not be true even if
-     * first check passed, if the SecurityManager treats some threads
-     * specially.
-     */
+    /**  */
     private void checkShutdownAccess() {
         SecurityManager security = System.getSecurityManager();
         if (security != null) {
@@ -554,12 +547,12 @@ public class ThreadPoolExecutorTest extends AbstractExecutorService {
                 /** cas新增一个工作线程数 */
                 if (compareAndIncrementWorkerCount(c))
                     break retry;
-                c = ctl.get();  // Re-read ctl
+                c = ctl.get();
                 if (runStateOf(c) != rs)
                     continue retry;
-                // else CAS failed due to workerCount change; retry inner loop
             }
         }
+
         /** 工作线程是否启动标识 */
         boolean workerStarted = false;
 
@@ -572,7 +565,7 @@ public class ThreadPoolExecutorTest extends AbstractExecutorService {
             final Thread t = w.thread;
             if (t != null) {
                 final ReentrantLock mainLock = this.mainLock;
-                /** 获取可重入的独占锁 */
+                /** 获取可重入的独占锁,HashSet底层是HashMap，是线程不安全的 */
                 mainLock.lock();
                 try {
                     int rs = runStateOf(ctl.get());
@@ -686,7 +679,7 @@ public class ThreadPoolExecutorTest extends AbstractExecutorService {
             /** allowCoreThreadTimeOut是核心线程的超时标识，默认为false，或者线程数超过了核心线程数 */
             boolean timed = allowCoreThreadTimeOut || wc > corePoolSize;
 
-            /** 如果超时获取任务了，则返回null，销魂线程 */
+            /** 如果超时获取任务了，则返回null，销毁线程 */
             if ((wc > maximumPoolSize || (timed && timedOut))
                     && (wc > 1 || workQueue.isEmpty())) {
                 if (compareAndDecrementWorkerCount(c))
@@ -728,7 +721,7 @@ public class ThreadPoolExecutorTest extends AbstractExecutorService {
                         !wt.isInterrupted())
                     wt.interrupt();
                 try {
-                    /** 预留方法，可以继承重写 */
+                    /** 预留钩子方法，可以继承重写 */
                     beforeExecute(wt, task);
                     Throwable thrown = null;
                     try {
@@ -740,7 +733,7 @@ public class ThreadPoolExecutorTest extends AbstractExecutorService {
                     } catch (Throwable x) {
                         thrown = x; throw new Error(x);
                     } finally {
-                        /** 预留方法，可以继承重写 */
+                        /** 预留钩子方法，可以继承重写 */
                         afterExecute(task, thrown);
                     }
                 } finally {
@@ -940,17 +933,7 @@ public class ThreadPoolExecutorTest extends AbstractExecutorService {
             reject(command);
     }
 
-    /**
-     * Initiates an orderly shutdown in which previously submitted
-     * tasks are executed, but no new tasks will be accepted.
-     * Invocation has no additional effect if already shut down.
-     *
-     * <p>This method does not wait for previously submitted tasks to
-     * complete execution.  Use {@link #awaitTermination awaitTermination}
-     * to do that.
-     *
-     * @throws SecurityException {@inheritDoc}
-     */
+    /** 线程池关闭 */
     public void shutdown() {
         final ReentrantLock mainLock = this.mainLock;
         mainLock.lock();
